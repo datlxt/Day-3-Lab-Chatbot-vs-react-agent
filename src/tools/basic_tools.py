@@ -72,15 +72,57 @@ STOCK = {
 # Tools
 # ---------------------------------------------------------------------------
 
+import ast
+import operator
+
+# Only these AST node operators are allowed -> no eval(), no attribute access,
+# no calls, no name lookups. Power (**) is intentionally excluded to block
+# DoS expressions like 2**99999999 that would freeze the process.
+_ALLOWED_BINOPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Mod: operator.mod,
+    ast.FloorDiv: operator.floordiv,
+}
+_ALLOWED_UNARYOPS = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
+
+
+def _safe_eval(node):
+    """Recursively evaluate a parsed arithmetic AST, rejecting anything unsafe."""
+    if isinstance(node, ast.Expression):
+        return _safe_eval(node.body)
+    if isinstance(node, ast.Constant):  # numbers only
+        if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            return node.value
+        raise ValueError("only numeric literals are allowed")
+    if isinstance(node, ast.BinOp) and type(node.op) in _ALLOWED_BINOPS:
+        return _ALLOWED_BINOPS[type(node.op)](_safe_eval(node.left), _safe_eval(node.right))
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_UNARYOPS:
+        return _ALLOWED_UNARYOPS[type(node.op)](_safe_eval(node.operand))
+    raise ValueError("unsupported expression")
+
+
 def calculator(expression: str) -> str:
-    """Evaluate a basic arithmetic expression safely."""
-    allowed_chars = set("0123456789+-*/(). ")
+    """Evaluate a basic arithmetic expression safely (no eval, AST-based)."""
+    allowed_chars = set("0123456789+-*/%(). ")
     if not expression or any(char not in allowed_chars for char in expression):
         return "Invalid expression. Only numbers and basic math operators are allowed."
     try:
-        return str(eval(expression, {"__builtins__": {}}, {}))
+        tree = ast.parse(expression, mode="eval")
+        result = _safe_eval(tree)
+    except ZeroDivisionError:
+        return "Calculation error: division by zero."
     except Exception as exc:
         return f"Calculation error: {exc}"
+    # Show integers without a trailing .0 (e.g. 144 instead of 144.0).
+    if isinstance(result, float) and result.is_integer():
+        result = int(result)
+    return str(result)
 
 
 def lookup_product_price(product_name: str) -> str:
